@@ -37,9 +37,9 @@ def get_lat_lon(location: str):
         if geo:
             return geo.latitude, geo.longitude
         else:
-            return None, None
+            return 19.1248, 72.82485
     except (GeocoderTimedOut, GeocoderUnavailable):
-        return None, None
+        return 19.1248, 72.82485
 
 # ------------------------------
 # Twilio SMS setup
