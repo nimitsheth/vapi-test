@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request
 import logging
 from supabase import create_client, Client
 from cuid import cuid
+from datetime import datetime, timezone
 
 import os
 
@@ -49,14 +50,22 @@ async def handle_webhook(data: dict):
         description = f"{caller_state} {additional_notes}".strip()
 
         emergency_id = cuid()
-
+        now = datetime.now(timezone.utc).isoformat()
         record = {
-            "id" : emergency_id,
+            "id": cuid(),
             "title": emergency_type,
             "description": description,
             "location": location,
-            "severity": urgency_level
+            "latitude": None,
+            "longitude": None,
+            "severity": urgency_level or "medium",
+            "status": "open",
+            "created_at": now,      # Prisma @map("created_at")
+            "updated_at": now,      # Prisma @map("updated_at")
+            "created_by": None,
+            "assigned_to": None
         }
+
 
         # ------------------------------
         # Insert record into Supabase
