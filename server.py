@@ -2,8 +2,10 @@ from fastapi import FastAPI, Request
 import logging
 from supabase import create_client, Client
 from cuid import cuid
-from datetime import datetime, timezone
-
+from datetime import datetime
+import pytz
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 import os
 
 app = FastAPI()
@@ -16,12 +18,27 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 # ------------------------------
 # Supabase configuration
 # ------------------------------
-SUPABASE_URL = os.getenv("SUPABASE_URL")      # e.g., "https://xyzcompany.supabase.co"
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")      # Your anon or service_role key
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ------------------------------
-# Store last webhook for debug display
+# OSM Geocoder
+# ------------------------------
+geolocator = Nominatim(user_agent="emergency_webhook")
+
+def get_lat_lon(location: str):
+    try:
+        geo = geolocator.geocode(location, timeout=10)
+        if geo:
+            return geo.latitude, geo.longitude
+        else:
+            return None, None
+    except (GeocoderTimedOut, GeocoderUnavailable):
+        return None, None
+
+# ------------------------------
+# Store last webhook for debug
 # ------------------------------
 last_webhook_data = None
 
@@ -49,35 +66,51 @@ async def handle_webhook(data: dict):
 
         description = f"{caller_state} {additional_notes}".strip()
 
-        emergency_id = cuid()
-        now = datetime.now(timezone.utc).isoformat()
+        # ------------------------------
+        # Get latitude and longitude via OSM
+        # ------------------------------
+        latitude, longitude = get_lat_lon(location)
+
+        # ------------------------------
+        # IST timestamp
+        # ------------------------------
+        ist = pytz.timezone("Asia/Kolkata")
+        now = datetime.now(ist).isoformat()
+
+        # ------------------------------
+        # Prepare record
+        # ------------------------------
         record = {
             "id": cuid(),
             "title": emergency_type,
             "description": description,
             "location": location,
-            "latitude": None,
-            "longitude": None,
+            "latitude": latitude,
+            "longitude": longitude,
+            "type": emergency_type.lower() if emergency_type else "general",  # map to type field
             "severity": urgency_level or "medium",
             "status": "open",
-            "created_at": now,      # Prisma @map("created_at")
-            "updated_at": now,      # Prisma @map("updated_at")
+            "auto_assigned": False,
+            "assigned_responder": None,
+            "eta_minutes": None,
+            "estimated_arrival": None,
+            "created_at": now,
+            "updated_at": now,
             "created_by": None,
             "assigned_to": None
         }
 
-
         # ------------------------------
-        # Insert record into Supabase
+        # Insert into Supabase
         # ------------------------------
         try:
             response = supabase.table("emergencies").insert(record).execute()
-            if response.data:
-                logging.info(f"Emergency successfully inserted into Supabase: {record}")
+            if response.error is None:
+                logging.info(f"✅ Emergency successfully inserted: {response.data}")
             else:
-                logging.error(f"Failed to insert into Supabase. Status: {response.status_code}, {response.data}")
+                logging.error(f"❌ Failed to insert emergency. Error: {response.error}")
         except Exception as e:
-            logging.error(f"Error inserting emergency into Supabase: {e}")
+            logging.error(f"🚨 Exception inserting emergency into Supabase: {e}")
 
         return {"status": "ok", "inserted_record": record}
 
@@ -98,10 +131,3 @@ async def show_last_webhook():
 @app.get("/")
 async def root():
     return {"status": "Webhook server is live"}
-
-# ------------------------------
-# Run the server
-# ------------------------------
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=3000)
