@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request
 import logging
 from supabase import create_client, Client
+from cuid import cuid
 
 import os
 
@@ -47,7 +48,10 @@ async def handle_webhook(data: dict):
 
         description = f"{caller_state} {additional_notes}".strip()
 
+        emergency_id = cuid()
+
         record = {
+            "id" : emergency_id,
             "title": emergency_type,
             "description": description,
             "location": location,
