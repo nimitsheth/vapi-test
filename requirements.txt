@@ -3,3 +3,4 @@ uvicorn
 supabase
 cuid
 pytz
+geopy
