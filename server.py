@@ -72,7 +72,7 @@ async def handle_webhook(data: dict):
         # ------------------------------
         try:
             response = supabase.table("emergencies").insert(record).execute()
-            if response.status_code in (200, 201):
+            if response.data:
                 logging.info(f"Emergency successfully inserted into Supabase: {record}")
             else:
                 logging.error(f"Failed to insert into Supabase. Status: {response.status_code}, {response.data}")
