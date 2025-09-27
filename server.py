@@ -6,8 +6,12 @@ from datetime import datetime
 import pytz
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
+from twilio.rest import Client as TwilioClient
 import os
 
+# ------------------------------
+# App setup
+# ------------------------------
 app = FastAPI()
 
 # ------------------------------
@@ -38,6 +42,23 @@ def get_lat_lon(location: str):
         return None, None
 
 # ------------------------------
+# Twilio SMS setup
+# ------------------------------
+twilio_client = TwilioClient(os.getenv("TWILIO_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
+twilio_from = os.getenv("TWILIO_PHONE_NUMBER")
+
+def send_sms(to_number: str, message: str):
+    try:
+        twilio_client.messages.create(
+            body=message,
+            from_=twilio_from,
+            to=to_number
+        )
+        logging.info(f"✅ SMS sent to {to_number}")
+    except Exception as e:
+        logging.error(f"❌ Failed to send SMS to {to_number}: {e}")
+
+# ------------------------------
 # Store last webhook for debug
 # ------------------------------
 last_webhook_data = None
@@ -63,23 +84,18 @@ async def handle_webhook(data: dict):
         additional_notes = structured.get("additional_notes", "")
         location = structured.get("location", "Unknown Location")
         urgency_level = structured.get("urgency_level", "medium")
+        caller_number = structured.get("caller_number")  # Make sure this is provided by VAPI
 
         description = f"{caller_state} {additional_notes}".strip()
 
-        # ------------------------------
         # Get latitude and longitude via OSM
-        # ------------------------------
         latitude, longitude = get_lat_lon(location)
 
-        # ------------------------------
         # IST timestamp
-        # ------------------------------
         ist = pytz.timezone("Asia/Kolkata")
         now = datetime.now(ist).isoformat()
 
-        # ------------------------------
         # Prepare record
-        # ------------------------------
         record = {
             "id": cuid(),
             "title": emergency_type,
@@ -87,26 +103,24 @@ async def handle_webhook(data: dict):
             "location": location,
             "latitude": latitude,
             "longitude": longitude,
-            "type": emergency_type.lower() if emergency_type else "general",  # map to type field
             "severity": urgency_level or "medium",
             "status": "open",
-            "auto_assigned": False,
-            "assigned_responder": None,
-            "eta_minutes": None,
-            "estimated_arrival": None,
             "created_at": now,
             "updated_at": now,
             "created_by": None,
             "assigned_to": None
         }
 
-        # ------------------------------
         # Insert into Supabase
-        # ------------------------------
         try:
             response = supabase.table("emergencies").insert(record).execute()
             if response.error is None:
                 logging.info(f"✅ Emergency successfully inserted: {response.data}")
+
+                # Send SMS to caller
+                if caller_number:
+                    sms_message = "Emergency services have been dispatched. Help is on the way."
+                    send_sms(caller_number, sms_message)
             else:
                 logging.error(f"❌ Failed to insert emergency. Error: {response.error}")
         except Exception as e:
@@ -119,7 +133,7 @@ async def handle_webhook(data: dict):
         return {"status": "ignored"}
 
 # ------------------------------
-# GET endpoint for testing / debug
+# GET endpoint for debug / testing
 # ------------------------------
 @app.get("/webhook")
 async def show_last_webhook():
@@ -131,3 +145,10 @@ async def show_last_webhook():
 @app.get("/")
 async def root():
     return {"status": "Webhook server is live"}
+
+# ------------------------------
+# Run server
+# ------------------------------
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=3000)
