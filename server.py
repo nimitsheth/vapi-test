@@ -1,11 +1,10 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 import logging
 from supabase import create_client, Client
 from cuid import cuid
 from datetime import datetime
 import pytz
-from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
+import requests
 from twilio.rest import Client as TwilioClient
 import os
 
@@ -27,19 +26,25 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ------------------------------
-# OSM Geocoder
+# Mapbox Geocoder
 # ------------------------------
-geolocator = Nominatim(user_agent="emergency_webhook")
+MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN")
 
 def get_lat_lon(location: str):
     try:
-        geo = geolocator.geocode(location, timeout=10)
-        if geo:
-            return geo.latitude, geo.longitude
-        else:
-            return 19.1248, 72.82485
-    except (GeocoderTimedOut, GeocoderUnavailable):
-        return 19.1248, 72.82485
+        url = f"https://api.mapbox.com/geocoding/v5/mapbox.places/{location}.json"
+        params = {"access_token": MAPBOX_TOKEN, "limit": 1, "country": "IN"}
+        response = requests.get(url, params=params, timeout=5)
+
+        if response.status_code == 200:
+            data = response.json()
+            if data["features"]:
+                lon, lat = data["features"][0]["geometry"]["coordinates"]
+                return lat, lon
+        return None, None
+    except Exception as e:
+        logging.error(f"❌ Mapbox geocoding failed: {e}")
+        return None, None
 
 # ------------------------------
 # Twilio SMS setup
@@ -52,7 +57,7 @@ def send_sms(to_number: str, message: str):
         twilio_client.messages.create(
             body=message,
             from_=twilio_from,
-            to="+918291949073"
+            to=to_number
         )
         logging.info(f"✅ SMS sent to {to_number}")
     except Exception as e:
@@ -84,11 +89,11 @@ async def handle_webhook(data: dict):
         additional_notes = structured.get("additional_notes", "")
         location = structured.get("location", "Unknown Location")
         urgency_level = structured.get("urgency_level", "medium")
-        caller_number = structured.get("caller_number")  # Make sure this is provided by VAPI
+        caller_number = structured.get("caller_number")
 
         description = f"{caller_state} {additional_notes}".strip()
 
-        # Get latitude and longitude via OSM
+        # Get latitude and longitude via Mapbox
         latitude, longitude = get_lat_lon(location)
 
         # IST timestamp
@@ -119,7 +124,7 @@ async def handle_webhook(data: dict):
 
                 # Send SMS to caller
                 if caller_number:
-                    sms_message = "Emergency services have been dispatched. Help is on the way."
+                    sms_message = "🚑 Emergency services have been dispatched. Help is on the way."
                     send_sms(caller_number, sms_message)
             else:
                 logging.error(f"❌ Failed to insert emergency. Error: {response.error}")
@@ -145,10 +150,3 @@ async def show_last_webhook():
 @app.get("/")
 async def root():
     return {"status": "Webhook server is live"}
-
-# ------------------------------
-# Run server
-# ------------------------------
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=3000)
