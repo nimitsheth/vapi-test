@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 import logging
 
 # Initialize FastAPI
@@ -14,23 +14,29 @@ logging.basicConfig(
 async def handle_webhook(data: dict):
     """
     Handles incoming webhook events from VAPI.
-    Logs 'speech-update' and 'call-ended' events.
+    Supports 'end-of-call-report' events.
     """
 
-    event_type = data.get("type")
+    event_type = data.get("message", {}).get("type")
 
-    if event_type == "speech-update":
-        transcript = data.get("transcript")
-        logging.info(f"[Speech Update] User said: {transcript}")
+    if event_type == "end-of-call-report":
+        ended_reason = data["message"].get("endedReason")
+        call_duration = data["message"].get("call", {}).get("duration")
+        transcript = data["message"].get("artifact", {}).get("transcript")
+        messages = data["message"].get("artifact", {}).get("messages", [])
 
-    elif event_type == "call-ended":
-        duration = data.get("call", {}).get("duration")
-        logging.info(f"[Call Ended] Duration: {duration}s")
+        logging.info(f"[Call Ended] Reason: {ended_reason}, Duration: {call_duration}s")
+        logging.info(f"[Transcript] {transcript}")
+
+        # Log each message in the conversation
+        for msg in messages:
+            role = msg.get("role")
+            message_text = msg.get("message")
+            logging.info(f"[Message] {role}: {message_text}")
 
     else:
         logging.info(f"[Other Event] Received event type: {event_type}")
 
-    # Always respond 200 OK to VAPI
     return {"status": "ok"}
 
 
