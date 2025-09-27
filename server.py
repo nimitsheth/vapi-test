@@ -52,7 +52,7 @@ def send_sms(to_number: str, message: str):
         twilio_client.messages.create(
             body=message,
             from_=twilio_from,
-            to=to_number
+            to="+918291949073"
         )
         logging.info(f"✅ SMS sent to {to_number}")
     except Exception as e:
