@@ -1,9 +1,8 @@
 from fastapi import FastAPI, Request
-from sentence_transformers import SentenceTransformer
-import pandas as pd
-import faiss
-import numpy as np
 import logging
+from supabase import create_client, Client
+
+import os
 
 app = FastAPI()
 
@@ -13,17 +12,11 @@ app = FastAPI()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # ------------------------------
-# Load department data & initialize FAISS
+# Supabase configuration
 # ------------------------------
-df = pd.read_csv("departments.csv")
-encoder = SentenceTransformer("all-mpnet-base-v2")
-
-# Encode department texts
-logging.info("Encoding department descriptions...")
-vectors = encoder.encode(df.text, convert_to_numpy=True)
-index = faiss.IndexFlatL2(vectors.shape[1])
-index.add(vectors)
-logging.info("FAISS index created with {} entries.".format(len(df)))
+SUPABASE_URL = os.getenv("SUPABASE_URL")      # e.g., "https://xyzcompany.supabase.co"
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")      # Your anon or service_role key
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ------------------------------
 # Store last webhook for debug display
@@ -41,28 +34,39 @@ async def handle_webhook(data: dict):
     event_type = data.get("message", {}).get("type")
 
     if event_type == "end-of-call-report":
-        ended_reason = data["message"].get("endedReason")
-        summary = data["message"].get("analysis", {}).get("summary", "")
-        call_duration = data["message"].get("call", {}).get("duration")
+        logging.info(f"[Call Ended] Full payload received")
 
-        logging.info(f"[Call Ended] Reason: {ended_reason}, Duration: {call_duration}s")
-        logging.info(f"[Summary] {summary}")
+        # Extract structured data
+        structured = data.get("message", {}).get("analysis", {}).get("structuredData", {})
+
+        emergency_type = structured.get("emergency_type", "Unknown Emergency")
+        caller_state = structured.get("caller_state", "")
+        additional_notes = structured.get("additional_notes", "")
+        location = structured.get("location", "Unknown Location")
+        urgency_level = structured.get("urgency_level", "medium")
+
+        description = f"{caller_state} {additional_notes}".strip()
+
+        record = {
+            "title": emergency_type,
+            "description": description,
+            "location": location,
+            "severity": urgency_level
+        }
 
         # ------------------------------
-        # Classification / Matching
+        # Insert record into Supabase
         # ------------------------------
-        matches = []
-        if summary:
-            query_vector = encoder.encode(summary).reshape(1, -1)
-            k = 1  # top 2 matching departments
-            distances, indices = index.search(query_vector, k=k)
+        try:
+            response = supabase.table("emergencies").insert(record).execute()
+            if response.status_code in (200, 201):
+                logging.info(f"Emergency successfully inserted into Supabase: {record}")
+            else:
+                logging.error(f"Failed to insert into Supabase. Status: {response.status_code}, {response.data}")
+        except Exception as e:
+            logging.error(f"Error inserting emergency into Supabase: {e}")
 
-            matches = df.loc[indices[0]].to_dict(orient="records")
-            logging.info("[Classification Matches]")
-            for match in matches:
-                logging.info(f"Department: {match['departmentName']}, Contact: {match['Contact']}")
-
-        return {"status": "ok", "matches": matches}
+        return {"status": "ok", "inserted_record": record}
 
     else:
         logging.info(f"[Other Event] Received event type: {event_type}")
