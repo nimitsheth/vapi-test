@@ -99,7 +99,8 @@ async def handle_webhook(data: dict):
         # IST timestamp
         ist = pytz.timezone("Asia/Kolkata")
         now = datetime.now(ist).isoformat()
-
+        logging.info(f"location: {location}")
+        logging.info(f"Latitude: {latitude}, Longitude: {longitude}")
         # Prepare record
         record = {
             "id": cuid(),
